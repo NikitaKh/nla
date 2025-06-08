@@ -1,16 +1,23 @@
 import argparse
 import gzip
 import json
-import logging
 import os
 import re
-import sys
 import shutil
+import signal
+import sys
+import traceback
 from collections import defaultdict
 from datetime import datetime
 from json import JSONDecodeError
 from pathlib import Path
 from statistics import median
+
+import structlog
+
+from nla.utils.log_config import configure_struct_logger
+
+logger = structlog.get_logger()
 
 # log_format ui_short '$remote_addr  $remote_user $http_x_real_ip [$time_local] "$request" '
 #                     '$status $body_bytes_sent "$http_referer" '
@@ -25,8 +32,8 @@ LOG_LINE_REGEX = re.compile(
 
 def load_config_file(basic_config: dict, path: str) -> dict:
     if not os.path.exists(path):
-        logging.error(f"Conf file not exist: {path}")
-        sys.exit(1)
+        logger.error(f"Conf file not exist: {path}", exc_info=True, stack_info=True)
+        raise FileNotFoundError
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read().strip()
@@ -34,26 +41,33 @@ def load_config_file(basic_config: dict, path: str) -> dict:
                 config_file = json.loads(content) if content else json.loads('{}')
                 config = basic_config.copy()
                 config.update(config_file)
-                return config
             except JSONDecodeError as decode_error:
-                logging.exception(f"Error while parsing conf file {path}: {decode_error}")
-                sys.exit(1)
+                logger.error(f"Error while parsing conf file {path}: {decode_error}", exc_info=True, stack_info=True)
+                raise
     except Exception as e:
-        logging.exception(f"Error while reading conf file {path}: {e}")
-        sys.exit(1)
+        logger.error(f"Error while reading conf file {path}: {e}", exc_info=True, stack_info=True)
+        raise
+    else:
+        logger.info(f"Config loaded successfully")
+        return config
 
 
-def find_latest_log_file(log_dir: str) -> str | None:
+def find_latest_log_file(log_dir: Path) -> str | None:
     latest = None
-    for entry in os.listdir(log_dir):
-        match = LOG_FILE_REGEX.match(entry)
-        if match:
-            date_str = match.group(1)
-            date = datetime.strptime(date_str, "%Y%m%d")
-            full_path = os.path.join(log_dir, entry)
-            if not latest or date > latest[0]:
-                latest = (date, full_path)
-    return latest[1] if latest else None
+    try:
+        for entry in os.listdir(log_dir):
+            match = LOG_FILE_REGEX.match(entry)
+            if match:
+                date_str = match.group(1)
+                date = datetime.strptime(date_str, "%Y%m%d")
+                full_path = os.path.join(log_dir, entry)
+                if not latest or date > latest[0]:
+                    latest = (date, full_path)
+    except Exception as e:
+        logger.error(f"Error while finding log dir {log_dir}: {e}", exc_info=True, stack_info=True)
+        raise
+    else:
+        return latest[1] if latest else None
 
 
 def parse_log_file(filepath: str, report_size: int) -> list:
@@ -99,17 +113,14 @@ def parse_log_file(filepath: str, report_size: int) -> list:
 
         return stats[:report_size]
     except Exception as e:
-        logging.exception(f"Error while parsing log file {filepath}: {e}")
-        sys.exit(1)
+        logger.error(f"Error while parsing log file {filepath}: {e}", exc_info=True, stack_info=True)
+        raise
 
 
-def render_report(report_data: list, report_dir: str, report_date: str, resources_dir: str):
+def render_report(report_data: list, report_dir: Path, report_date: str, resources_dir: Path):
     os.makedirs(report_dir, exist_ok=True)
     report_filename = f"report-{report_date}.html"
     report_path = os.path.join(report_dir, report_filename)
-
-    src = f'{resources_dir}/jquery.tablesorter.min.js'
-    dst = f'{report_dir}/jquery.tablesorter.min.js'
 
     try:
         with open(f'{resources_dir}/report.html', 'r', encoding='utf-8') as template_file:
@@ -121,47 +132,88 @@ def render_report(report_data: list, report_dir: str, report_date: str, resource
         with open(report_path, 'w', encoding='utf-8') as output_file:
             output_file.write(report_content)
 
-        logging.info(f"Report created: {report_path}")
+        logger.info(f"Report created: {report_path}")
     except Exception as e:
-        logging.error(f"Error while creating report: {e}")
+        logger.error(f"Error while creating report: {e}", exc_info=True, stack_info=True)
         raise
 
-def copy_jc_function(resources_dir: str, report_dir: str):
+
+def copy_jc_function(resources_dir: Path, report_dir: Path):
     try:
         src = f'{resources_dir}/jquery.tablesorter.min.js'
         dst = f'{report_dir}/jquery.tablesorter.min.js'
         shutil.copyfile(src, dst)
     except Exception as e:
-        logging.error(f"Error while copying js file: {e}")
+        logger.error(f"Error while copying js file: {e}", exc_info=True, stack_info=True)
+
+
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        logger.error("Interrupted by user", exc_info=True)
+        return
+    logger.error(
+        "Unhandled exception",
+        exc_type=str(exc_type),
+        exc_value=str(exc_value),
+        traceback="".join(traceback.format_exception(exc_type, exc_value, exc_traceback)),
+    )
+
+
+def handle_sigterm(signum, frame):
+    logger.warning("Received SIGTERM, shutting down")
+    sys.exit(143)
 
 
 def main():
+    # default config
     config = {
         "REPORT_SIZE": 10,
-        "REPORT_DIR": "./reports",
-        "LOG_DIR": "./log",
-        "RESOURCES_DIR": "./resources"
+        "REPORT_DIR": "../reports",
+        "LOG_DIR": "../log",
+        "DATA_DIR": "../data",
+        "STRUCT_LOG_FILE": '../app.log'
     }
-    conf_path: str = './resources/config'
 
+    conf_path: Path = (Path(__file__).parent / '../data/config').resolve()
+    report_dir: Path = (Path(__file__).parent / config.get("REPORT_DIR")).resolve()
+    log_dir: Path = (Path(__file__).parent / config.get("LOG_DIR")).resolve()
+    data_dir: Path = (Path(__file__).parent / config.get("DATA_DIR")).resolve()
+    log_file: Path = (Path(__file__).parent / config.get("STRUCT_LOG_FILE")).resolve()
+
+    # prepare custom config data
     parser = argparse.ArgumentParser(description="NLA (Nginx Log Parser)")
     parser.add_argument('--config', type=str, default=conf_path, help='Path to config file')
     args = parser.parse_args()
     config = load_config_file(basic_config=config, path=args.config)
 
-    latest_log_file = find_latest_log_file(config["LOG_DIR"])
+    global logger
+    logger = configure_struct_logger(log_file)
+
+    # define latest log file
+    latest_log_file = find_latest_log_file(log_dir)
     if not latest_log_file:
-        logging.info("Log dir is empty.")
-        sys.exit(0)
+        logger.info("Log dir is empty.")
+        return
+    logger.info(f"Log file loaded successfully")
+
+    # extracting log date
     log_file_date = re.search(r'(\d{8})', latest_log_file).group(1)
     log_file_date_converted = datetime.strptime(log_file_date, "%Y%m%d").strftime("%Y.%m.%d")
-    report_path = Path(config["REPORT_DIR"]) / f"report-{log_file_date_converted}.html"
+
+    # check whether repost exists
+    report_path = Path(report_dir) / f"report-{log_file_date_converted}.html"
     if report_path.exists():
-        logging.info(f"Report already exists: {report_path}")
+        logger.info(f"Report already exists: {report_path}")
         return
-    report_data = parse_log_file(latest_log_file, config["REPORT_SIZE"])
-    render_report(report_data, config["REPORT_DIR"], log_file_date_converted, config["RESOURCES_DIR"])
-    copy_jc_function(config["RESOURCES_DIR"], config["REPORT_DIR"])
+
+    # prepare report
+    report_data = parse_log_file(latest_log_file, config.get("REPORT_SIZE"))
+    render_report(report_data, report_dir, log_file_date_converted, data_dir)
+    copy_jc_function(data_dir, report_dir)
+
 
 if __name__ == '__main__':
+
+    sys.excepthook = global_exception_handler
+    signal.signal(signal.SIGTERM, handle_sigterm)
     main()
