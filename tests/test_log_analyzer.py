@@ -12,7 +12,7 @@ from nla.log_analyzer import (
     load_config_file,
     find_latest_log_file,
     parse_log_file,
-    render_report
+    render_report,
 )
 
 
@@ -25,7 +25,7 @@ def mock_logger(monkeypatch):
 
 @pytest.fixture
 def temp_config_file():
-    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as f:
         f.write(json.dumps({"REPORT_SIZE": 5}))
         f.flush()
         yield f.name
@@ -45,7 +45,7 @@ def test_load_config_file_not_found():
 
 
 def test_load_config_file_invalid_json():
-    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as f:
         f.write("{invalid_json")
         name = f.name
     with pytest.raises(json.JSONDecodeError):
@@ -72,39 +72,62 @@ def _write_log_file(path: Path, lines: list[str], gz=False):
 
 
 def test_parse_log_file_plain():
-    log_line = '1.2.3.4 - - [01/Jan/2025:00:00:01 +0000] "GET /test HTTP/1.1" 200 123 "-" "agent" "x" "y" "z" "w" 0.123'
+    log_line = (
+        r"1.196.116.32 -  - [29/Jun/2017:03:50:22 +0300] "
+        r'"GET /api/v2/banner/25019354 HTTP/1.1" 200 927 "-" '
+        r'"Lynx/2.8.8dev.9 libwww-FM/2.14 SSL-MM/1.4.1 '
+        r'GNUTLS/2.10.5" "-" "1498697422-2190034393-4708-9752759"'
+        r' "dc7161be3" 0.390'
+    )
     with tempfile.NamedTemporaryFile(mode="wt", delete=False) as f:
         f.write(log_line + "\n")
         name = f.name
 
     result = parse_log_file(name, report_size=1)
     assert len(result) == 1
-    assert result[0]["url"] == "/test"
+    assert result[0]["url"] == "/api/v2/banner/25019354"
     os.unlink(name)
 
 
 def test_parse_log_file_gz():
-    log_line = '1.2.3.4 - - [01/Jan/2025:00:00:01 +0000] "GET /gzip HTTP/1.1" 200 123 "-" "agent" "x" "y" "z" "w" 0.321'
+    log_line = (
+        r"1.196.116.32 -  - [29/Jun/2017:03:50:22 +0300] "
+        r'"GET /api/v2/banner/25019354 HTTP/1.1" 200 927 "-" '
+        r'"Lynx/2.8.8dev.9 libwww-FM/2.14 SSL-MM/1.4.1 '
+        r'GNUTLS/2.10.5" "-" "1498697422-2190034393-4708-9752759"'
+        r' "dc7161be3" 0.390'
+    )
     with tempfile.NamedTemporaryFile(delete=False, suffix=".gz") as f:
         gz_path = f.name
     _write_log_file(Path(gz_path), [log_line], gz=True)
 
     result = parse_log_file(gz_path, report_size=1)
     assert len(result) == 1
-    assert result[0]["url"] == "/gzip"
+    assert result[0]["url"] == "/api/v2/banner/25019354"
     os.unlink(gz_path)
 
 
 def test_render_report(tmp_path):
-    report_data = [{"url": "/example", "count": 1, "count_perc": 100.0, "time_sum": 1.23,
-                    "time_perc": 100.0, "time_avg": 1.23, "time_max": 1.23, "time_med": 1.23}]
+    report_data = [
+        {
+            "url": "/example",
+            "count": 1,
+            "count_perc": 100.0,
+            "time_sum": 1.23,
+            "time_perc": 100.0,
+            "time_avg": 1.23,
+            "time_max": 1.23,
+            "time_med": 1.23,
+        }
+    ]
     resources_dir = tmp_path / "resources"
     report_dir = tmp_path / "report"
     resources_dir.mkdir()
     report_dir.mkdir()
 
     template_path = resources_dir / "report.html"
-    template_path.write_text("<html><body>$table_json</body></html>", encoding="utf-8")
+    template_data = "<html><body>$table_json</body></html>"
+    template_path.write_text(template_data, encoding="utf-8")
 
     render_report(report_data, report_dir, "2025.06.08", resources_dir)
 
