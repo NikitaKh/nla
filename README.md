@@ -22,7 +22,7 @@ poetry install
 ## ⚙️ Пример запуска
 
 ```bash
-poetry run python -m nla.main --config ./data/config
+poetry run python -m nla.log_analyzer --config ./data/config
 ```
 
 
