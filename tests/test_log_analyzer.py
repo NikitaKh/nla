@@ -4,8 +4,10 @@ import os
 import tempfile
 from pathlib import Path
 from unittest import mock
+from typing import Any, Generator
 
 import pytest
+from pytest import MonkeyPatch
 
 import nla.log_analyzer as analyzer
 from nla.log_analyzer import (
@@ -17,14 +19,14 @@ from nla.log_analyzer import (
 
 
 @pytest.fixture(autouse=True)
-def mock_logger(monkeypatch):
+def mock_logger(monkeypatch: MonkeyPatch) -> Generator[mock.MagicMock, None, None]:
     mock_log = mock.MagicMock()
     monkeypatch.setattr(analyzer, "logger", mock_log)
     return mock_log
 
 
 @pytest.fixture
-def temp_config_file():
+def temp_config_file() -> Generator[str, None, None]:
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as f:
         f.write(json.dumps({"REPORT_SIZE": 5}))
         f.flush()
@@ -39,12 +41,12 @@ def test_load_config_file_success(temp_config_file):
     assert config["REPORT_SIZE"] == 5
 
 
-def test_load_config_file_not_found():
+def test_load_config_file_not_found() -> None:
     with pytest.raises(FileNotFoundError):
         load_config_file({}, "/non/existent/path.json")
 
 
-def test_load_config_file_invalid_json():
+def test_load_config_file_invalid_json() -> None:
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as f:
         f.write("{invalid_json")
         name = f.name
@@ -53,7 +55,7 @@ def test_load_config_file_invalid_json():
     os.unlink(name)
 
 
-def test_find_latest_log_file():
+def test_find_latest_log_file() -> Any:
     with tempfile.TemporaryDirectory() as temp_dir:
         file1 = Path(temp_dir) / "nginx-access-ui.log-20250101"
         file2 = Path(temp_dir) / "nginx-access-ui.log-20251231.gz"
@@ -61,17 +63,18 @@ def test_find_latest_log_file():
         file2.touch()
 
         latest = find_latest_log_file(Path(temp_dir))
+        assert latest is not None
         assert latest.endswith("nginx-access-ui.log-20251231.gz")
 
 
-def _write_log_file(path: Path, lines: list[str], gz=False):
+def _write_log_file(path: Path, lines: list[str], gz: bool = False) -> None:
     open_func = gzip.open if gz else open
     with open_func(path, "wt", encoding="utf-8") as f:
         for line in lines:
             f.write(line + "\n")
 
 
-def test_parse_log_file_plain():
+def test_parse_log_file_plain() -> None:
     log_line = (
         r"1.196.116.32 -  - [29/Jun/2017:03:50:22 +0300] "
         r'"GET /api/v2/banner/25019354 HTTP/1.1" 200 927 "-" '
@@ -89,7 +92,7 @@ def test_parse_log_file_plain():
     os.unlink(name)
 
 
-def test_parse_log_file_gz():
+def test_parse_log_file_gz() -> None:
     log_line = (
         r"1.196.116.32 -  - [29/Jun/2017:03:50:22 +0300] "
         r'"GET /api/v2/banner/25019354 HTTP/1.1" 200 927 "-" '
@@ -107,7 +110,7 @@ def test_parse_log_file_gz():
     os.unlink(gz_path)
 
 
-def test_render_report(tmp_path):
+def test_render_report(tmp_path: Path) -> Any:
     report_data = [
         {
             "url": "/example",

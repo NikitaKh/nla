@@ -1,10 +1,11 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 import structlog
 
 
-def configure_struct_logger(log_path: Path | None = None):
+def configure_struct_logger(log_path: Path | None = None) -> Any:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -16,9 +17,7 @@ def configure_struct_logger(log_path: Path | None = None):
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
         context_class=dict,
-        logger_factory=structlog.WriteLoggerFactory(
-            file=Path(log_path).open("a+t") if log_path else None
-        ),
+        logger_factory=structlog.WriteLoggerFactory(file=Path(log_path).open("a+t") if log_path else None),
         cache_logger_on_first_use=True,
     )
 
