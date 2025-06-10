@@ -3,16 +3,16 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest import mock
 from typing import Any, Generator
+from unittest import mock
 
 import pytest
 from pytest import MonkeyPatch
 
 import nla.log_analyzer as analyzer
 from nla.log_analyzer import (
-    load_config_file,
     find_latest_log_file,
+    load_config_file,
     parse_log_file,
     render_report,
 )
