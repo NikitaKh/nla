@@ -4,6 +4,11 @@ repos:
     hooks:
       - id: black
 
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1
+    hooks:
+      - id: isort
+
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.16.0
     hooks:
